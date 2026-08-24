@@ -35,13 +35,11 @@ def pantalla_login():
                 else:
                     st.error("Usuario o contraseña incorrectos.")
 
-# Si no está autenticado, detiene la ejecución aquí
 if not st.session_state["autenticado"]:
     pantalla_login()
     st.stop()
-# --------------------------------------------
 
-# CSS Personalizado para compactar espacio
+# CSS Personalizado
 st.markdown("""
     <style>
     .block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; }
@@ -111,103 +109,59 @@ def obtener_clima_ruta(origen):
     except Exception:
         return None
 
-# --- CONEXIÓN Y BASE DE DATOS ADAPTATIVA (TURSO / LOCAL) ---
+# --- CONEXIÓN Y BASE DE DATOS LOCAL ---
 def obtener_conexion():
-    if "TURSO_DATABASE_URL" in st.secrets:
-        import libsql_client
-        return libsql_client.create_client_sync(
-            url=st.secrets["TURSO_DATABASE_URL"],
-            auth_token=st.secrets["TURSO_AUTH_TOKEN"]
-        )
-    else:
-        return sqlite3.connect("solver_tracking.db")
+    return sqlite3.connect("solver_tracking.db")
 
 def init_db():
     conn = obtener_conexion()
-    if "TURSO_DATABASE_URL" in st.secrets:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS guias (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                numero_guia TEXT UNIQUE,
-                producto TEXT,
-                proveedor TEXT,
-                costo REAL,
-                origen TEXT,
-                destino TEXT,
-                metodo TEXT,
-                fecha_compra DATE,
-                dias_promedio INTEGER,
-                fecha_estimada DATE,
-                dias_alarma INTEGER,
-                estado TEXT
-            )
-        ''')
-        
-        columnas_nuevas = [
-            ("escala", "TEXT"), ("metodo_1", "TEXT"), ("costo_1", "REAL"),
-            ("dias_1", "INTEGER"), ("metodo_2", "TEXT"), ("costo_2", "REAL"),
-            ("dias_2", "INTEGER"), ("impuesto_1", "REAL"), ("impuesto_2", "REAL"),
-            ("tipo_cambio", "REAL"), ("notas", "TEXT")
-        ]
-        for col, tipo in columnas_nuevas:
-            try:
-                conn.execute(f"ALTER TABLE guias ADD COLUMN {col} {tipo}")
-            except Exception:
-                pass
-        conn.close()
-    else:
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS guias (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                numero_guia TEXT UNIQUE,
-                producto TEXT,
-                proveedor TEXT,
-                costo REAL,
-                origen TEXT,
-                destino TEXT,
-                metodo TEXT,
-                fecha_compra DATE,
-                dias_promedio INTEGER,
-                fecha_estimada DATE,
-                dias_alarma INTEGER,
-                estado TEXT
-            )
-        ''')
-        columnas_nuevas = [
-            ("escala", "TEXT"), ("metodo_1", "TEXT"), ("costo_1", "REAL"),
-            ("dias_1", "INTEGER"), ("metodo_2", "TEXT"), ("costo_2", "REAL"),
-            ("dias_2", "INTEGER"), ("impuesto_1", "REAL"), ("impuesto_2", "REAL"),
-            ("tipo_cambio", "REAL"), ("notas", "TEXT")
-        ]
-        for col, tipo in columnas_nuevas:
-            try:
-                c.execute(f"ALTER TABLE guias ADD COLUMN {col} {tipo}")
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-        conn.close()
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS guias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero_guia TEXT UNIQUE,
+            producto TEXT,
+            proveedor TEXT,
+            costo REAL,
+            origen TEXT,
+            destino TEXT,
+            metodo TEXT,
+            fecha_compra DATE,
+            dias_promedio INTEGER,
+            fecha_estimada DATE,
+            dias_alarma INTEGER,
+            estado TEXT
+        )
+    ''')
+    
+    columnas_nuevas = [
+        ("escala", "TEXT"), ("metodo_1", "TEXT"), ("costo_1", "REAL"),
+        ("dias_1", "INTEGER"), ("metodo_2", "TEXT"), ("costo_2", "REAL"),
+        ("dias_2", "INTEGER"), ("impuesto_1", "REAL"), ("impuesto_2", "REAL"),
+        ("tipo_cambio", "REAL"), ("notas", "TEXT")
+    ]
+    for col, tipo in columnas_nuevas:
+        try:
+            c.execute(f"ALTER TABLE guias ADD COLUMN {col} {tipo}")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+    conn.close()
 
 def guardar_guia(guia, producto, proveedor, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, fecha_compra, dias_alarma, notas):
     conn = obtener_conexion()
+    c = conn.cursor()
     dias_totales = dias_1 + dias_2
     costo_total = costo_1 + imp_1 + costo_2 + imp_2
     fecha_est = (fecha_compra + timedelta(days=dias_totales)).strftime('%Y-%m-%d')
     f_compra_str = fecha_compra.strftime('%Y-%m-%d')
     
     try:
-        if "TURSO_DATABASE_URL" in st.secrets:
-            conn.execute('''
-                INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ️''', (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito'))
-        else:
-            c = conn.cursor()
-            c.execute('''
-                INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito'))
-            conn.commit()
+        c.execute('''
+            INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito'))
+        conn.commit()
         exito = True
     except Exception:
         exito = False
@@ -216,48 +170,32 @@ def guardar_guia(guia, producto, proveedor, origen, escala, destino, metodo_1, c
 
 def actualizar_guia(id_registro, costo_1, imp_1, costo_2, imp_2, tipo_cambio, escala, notas, estado):
     conn = obtener_conexion()
+    c = conn.cursor()
     costo_total = costo_1 + imp_1 + costo_2 + imp_2
-    if "TURSO_DATABASE_URL" in st.secrets:
-        conn.execute('''
-            UPDATE guias 
-            SET costo_1 = ?, impuesto_1 = ?, costo_2 = ?, impuesto_2 = ?, tipo_cambio = ?, costo = ?, escala = ?, notas = ?, estado = ?
-            WHERE id = ?
-        ''', (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro))
-    else:
-        c = conn.cursor()
-        c.execute('''
-            UPDATE guias 
-            SET costo_1 = ?, impuesto_1 = ?, costo_2 = ?, impuesto_2 = ?, tipo_cambio = ?, costo = ?, escala = ?, notas = ?, estado = ?
-            WHERE id = ?
-        ''', (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro))
-        conn.commit()
+    c.execute('''
+        UPDATE guias 
+        SET costo_1 = ?, impuesto_1 = ?, costo_2 = ?, impuesto_2 = ?, tipo_cambio = ?, costo = ?, escala = ?, notas = ?, estado = ?
+        WHERE id = ?
+    ''', (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro))
+    conn.commit()
     conn.close()
 
 def eliminar_guia(id_registro):
     conn = obtener_conexion()
-    if "TURSO_DATABASE_URL" in st.secrets:
-        conn.execute("DELETE FROM guias WHERE id = ?", (id_registro,))
-    else:
-        c = conn.cursor()
-        c.execute("DELETE FROM guias WHERE id = ?", (id_registro,))
-        conn.commit()
+    c = conn.cursor()
+    c.execute("DELETE FROM guias WHERE id = ?", (id_registro,))
+    conn.commit()
     conn.close()
 
 def cargar_guias():
     conn = obtener_conexion()
-    if "TURSO_DATABASE_URL" in st.secrets:
-        res = conn.execute("SELECT * FROM guias ORDER BY id DESC")
-        columnas = [col[0] for col in res.columns]
-        filas = res.rows
-        df = pd.DataFrame(filas, columns=columnas)
-    else:
-        df = pd.read_sql_query("SELECT * FROM guias ORDER BY id DESC", conn)
+    df = pd.read_sql_query("SELECT * FROM guias ORDER BY id DESC", conn)
     conn.close()
     return df
 
 init_db()
 
-# --- BARRA LATERAL (CERRAR SESIÓN Y CONFIGURACIÓN) ---
+# --- BARRA LATERAL ---
 with st.sidebar:
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
         st.session_state["autenticado"] = False
@@ -512,7 +450,7 @@ with tab_rastreo:
                     st.markdown("---")
                     col_del1, col_del2 = st.columns([3, 1])
                     with col_del1:
-                        st.caption("⚠️ **Atención:** Eliminar esta orden la borrará de forma permanente de la base de datos.")
+                        st.caption("⚠️ **Atención:** Eliminar esta orden la borrará de forma permanente.")
                     with col_del2:
                         if st.button("🗑️ Eliminar Guía", key=f"btn_del_{row['id']}", type="secondary"):
                             eliminar_guia(row['id'])
