@@ -111,89 +111,147 @@ def obtener_clima_ruta(origen):
     except Exception:
         return None
 
-# --- CONEXIÓN Y BASE DE DATOS ---
-def init_db():
-    conn = sqlite3.connect("solver_tracking.db")
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS guias (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            numero_guia TEXT UNIQUE,
-            producto TEXT,
-            proveedor TEXT,
-            costo REAL,
-            origen TEXT,
-            destino TEXT,
-            metodo TEXT,
-            fecha_compra DATE,
-            dias_promedio INTEGER,
-            fecha_estimada DATE,
-            dias_alarma INTEGER,
-            estado TEXT
+# --- CONEXIÓN Y BASE DE DATOS ADAPTATIVA (TURSO / LOCAL) ---
+def obtener_conexion():
+    if "TURSO_DATABASE_URL" in st.secrets:
+        import libsql_client
+        return libsql_client.create_client_sync(
+            url=st.secrets["TURSO_DATABASE_URL"],
+            auth_token=st.secrets["TURSO_AUTH_TOKEN"]
         )
-    ''')
-    
-    columnas_nuevas = [
-        ("escala", "TEXT"),
-        ("metodo_1", "TEXT"),
-        ("costo_1", "REAL"),
-        ("dias_1", "INTEGER"),
-        ("metodo_2", "TEXT"),
-        ("costo_2", "REAL"),
-        ("dias_2", "INTEGER"),
-        ("impuesto_1", "REAL"),
-        ("impuesto_2", "REAL"),
-        ("tipo_cambio", "REAL"),
-        ("notas", "TEXT")
-    ]
-    for col, tipo in columnas_nuevas:
-        try:
-            c.execute(f"ALTER TABLE guias ADD COLUMN {col} {tipo}")
-        except sqlite3.OperationalError:
-            pass
-    conn.commit()
-    conn.close()
+    else:
+        return sqlite3.connect("solver_tracking.db")
+
+def init_db():
+    conn = obtener_conexion()
+    if "TURSO_DATABASE_URL" in st.secrets:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS guias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                numero_guia TEXT UNIQUE,
+                producto TEXT,
+                proveedor TEXT,
+                costo REAL,
+                origen TEXT,
+                destino TEXT,
+                metodo TEXT,
+                fecha_compra DATE,
+                dias_promedio INTEGER,
+                fecha_estimada DATE,
+                dias_alarma INTEGER,
+                estado TEXT
+            )
+        ''')
+        
+        columnas_nuevas = [
+            ("escala", "TEXT"), ("metodo_1", "TEXT"), ("costo_1", "REAL"),
+            ("dias_1", "INTEGER"), ("metodo_2", "TEXT"), ("costo_2", "REAL"),
+            ("dias_2", "INTEGER"), ("impuesto_1", "REAL"), ("impuesto_2", "REAL"),
+            ("tipo_cambio", "REAL"), ("notas", "TEXT")
+        ]
+        for col, tipo in columnas_nuevas:
+            try:
+                conn.execute(f"ALTER TABLE guias ADD COLUMN {col} {tipo}")
+            except Exception:
+                pass
+        conn.close()
+    else:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS guias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                numero_guia TEXT UNIQUE,
+                producto TEXT,
+                proveedor TEXT,
+                costo REAL,
+                origen TEXT,
+                destino TEXT,
+                metodo TEXT,
+                fecha_compra DATE,
+                dias_promedio INTEGER,
+                fecha_estimada DATE,
+                dias_alarma INTEGER,
+                estado TEXT
+            )
+        ''')
+        columnas_nuevas = [
+            ("escala", "TEXT"), ("metodo_1", "TEXT"), ("costo_1", "REAL"),
+            ("dias_1", "INTEGER"), ("metodo_2", "TEXT"), ("costo_2", "REAL"),
+            ("dias_2", "INTEGER"), ("impuesto_1", "REAL"), ("impuesto_2", "REAL"),
+            ("tipo_cambio", "REAL"), ("notas", "TEXT")
+        ]
+        for col, tipo in columnas_nuevas:
+            try:
+                c.execute(f"ALTER TABLE guias ADD COLUMN {col} {tipo}")
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
+        conn.close()
 
 def guardar_guia(guia, producto, proveedor, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, fecha_compra, dias_alarma, notas):
-    conn = sqlite3.connect("solver_tracking.db")
-    c = conn.cursor()
+    conn = obtener_conexion()
     dias_totales = dias_1 + dias_2
     costo_total = costo_1 + imp_1 + costo_2 + imp_2
-    fecha_est = fecha_compra + timedelta(days=dias_totales)
+    fecha_est = (fecha_compra + timedelta(days=dias_totales)).strftime('%Y-%m-%d')
+    f_compra_str = fecha_compra.strftime('%Y-%m-%d')
+    
     try:
-        c.execute('''
-            INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, fecha_compra, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito'))
-        conn.commit()
+        if "TURSO_DATABASE_URL" in st.secrets:
+            conn.execute('''
+                INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ️''', (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito'))
+        else:
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito'))
+            conn.commit()
         exito = True
-    except sqlite3.IntegrityError:
+    except Exception:
         exito = False
     conn.close()
     return exito
 
 def actualizar_guia(id_registro, costo_1, imp_1, costo_2, imp_2, tipo_cambio, escala, notas, estado):
-    conn = sqlite3.connect("solver_tracking.db")
-    c = conn.cursor()
+    conn = obtener_conexion()
     costo_total = costo_1 + imp_1 + costo_2 + imp_2
-    c.execute('''
-        UPDATE guias 
-        SET costo_1 = ?, impuesto_1 = ?, costo_2 = ?, impuesto_2 = ?, tipo_cambio = ?, costo = ?, escala = ?, notas = ?, estado = ?
-        WHERE id = ?
-    ''', (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro))
-    conn.commit()
+    if "TURSO_DATABASE_URL" in st.secrets:
+        conn.execute('''
+            UPDATE guias 
+            SET costo_1 = ?, impuesto_1 = ?, costo_2 = ?, impuesto_2 = ?, tipo_cambio = ?, costo = ?, escala = ?, notas = ?, estado = ?
+            WHERE id = ?
+        ''', (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro))
+    else:
+        c = conn.cursor()
+        c.execute('''
+            UPDATE guias 
+            SET costo_1 = ?, impuesto_1 = ?, costo_2 = ?, impuesto_2 = ?, tipo_cambio = ?, costo = ?, escala = ?, notas = ?, estado = ?
+            WHERE id = ?
+        ''', (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro))
+        conn.commit()
     conn.close()
 
 def eliminar_guia(id_registro):
-    conn = sqlite3.connect("solver_tracking.db")
-    c = conn.cursor()
-    c.execute("DELETE FROM guias WHERE id = ?", (id_registro,))
-    conn.commit()
+    conn = obtener_conexion()
+    if "TURSO_DATABASE_URL" in st.secrets:
+        conn.execute("DELETE FROM guias WHERE id = ?", (id_registro,))
+    else:
+        c = conn.cursor()
+        c.execute("DELETE FROM guias WHERE id = ?", (id_registro,))
+        conn.commit()
     conn.close()
 
 def cargar_guias():
-    conn = sqlite3.connect("solver_tracking.db")
-    df = pd.read_sql_query("SELECT * FROM guias ORDER BY id DESC", conn)
+    conn = obtener_conexion()
+    if "TURSO_DATABASE_URL" in st.secrets:
+        res = conn.execute("SELECT * FROM guias ORDER BY id DESC")
+        columnas = [col[0] for col in res.columns]
+        filas = res.rows
+        df = pd.DataFrame(filas, columns=columnas)
+    else:
+        df = pd.read_sql_query("SELECT * FROM guias ORDER BY id DESC", conn)
     conn.close()
     return df
 
