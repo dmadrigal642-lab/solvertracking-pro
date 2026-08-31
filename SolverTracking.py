@@ -188,6 +188,20 @@ def init_db():
     '''
     if "TURSO_DATABASE_URL" in st.secrets:
         ejecutar_sql(query_tabla)
+        # Intentar agregar columnas si la tabla ya existía sin ellas
+        columnas_nuevas = [
+            ("escala", "TEXT"), ("metodo_1", "TEXT"), ("costo_1", "REAL"),
+            ("dias_1", "INTEGER"), ("metodo_2", "TEXT"), ("costo_2", "REAL"),
+            ("dias_2", "INTEGER"), ("impuesto_1", "REAL"), ("impuesto_2", "REAL"),
+            ("tipo_cambio", "REAL"), ("notas", "TEXT"), ("proveedor", "TEXT"),
+            ("costo", "REAL"), ("origen", "TEXT"), ("fecha_compra", "DATE"),
+            ("dias_promedio", "INTEGER"), ("fecha_estimada", "DATE"), ("dias_alarma", "INTEGER")
+        ]
+        for col, tipo in columnas_nuevas:
+            try:
+                ejecutar_sql(f"ALTER TABLE guias ADD COLUMN {col} {tipo}")
+            except Exception:
+                pass
     else:
         conn = sqlite3.connect("solver_tracking.db")
         c = conn.cursor()
@@ -272,14 +286,30 @@ def cargar_guias():
             for row in results["rows"]:
                 r_vals = [cell.get("value") for cell in row]
                 rows.append(r_vals)
-            return pd.DataFrame(rows, columns=cols)
+            df = pd.DataFrame(rows, columns=cols)
         except Exception:
-            return pd.DataFrame()
+            df = pd.DataFrame()
     else:
         conn = sqlite3.connect("solver_tracking.db")
         df = pd.read_sql_query(sql, conn)
         conn.close()
-        return df
+
+    # Blindaje contra columnas faltantes en tablas antiguas de Turso
+    expected_cols = [
+        'id', 'numero_guia', 'producto', 'proveedor', 'costo', 'origen', 'escala', 
+        'destino', 'metodo_1', 'costo_1', 'impuesto_1', 'dias_1', 'metodo_2', 
+        'costo_2', 'impuesto_2', 'dias_2', 'tipo_cambio', 'fecha_compra', 
+        'dias_promedio', 'fecha_estimada', 'dias_alarma', 'notas', 'estado', 'metodo'
+    ]
+    for col in expected_cols:
+        if col not in df.columns:
+            df[col] = None if 'fecha' not in col else datetime.today().strftime('%Y-%m-%d')
+            if col == 'estado':
+                df[col] = 'En Tránsito'
+            if col == 'dias_alarma':
+                df[col] = 3
+
+    return df
 
 init_db()
 
@@ -310,23 +340,29 @@ with st.sidebar:
             
             for _, r in df_alertas.iterrows():
                 if r['estado'] not in ['Entregado', 'Cancelado / Perdido', 'Devuelto']:
-                    f_est = datetime.strptime(str(r['fecha_estimada']), "%Y-%m-%d").date()
-                    f_alr = f_est - timedelta(days=r['dias_alarma'])
-                    
-                    est_str = ""
-                    if hoy_check > f_est:
-                        est_str = f"🔴 Atrasado (Vencía el {f_est.strftime('%d/%m/%Y')})"
-                    elif hoy_check >= f_alr:
-                        est_str = f"🟡 Próximo a Llegar ({f_est.strftime('%d/%m/%Y')})"
-                        
-                    if est_str:
-                        guias_para_notificar.append({
-                            "producto": r['producto'],
-                            "numero_guia": r['numero_guia'],
-                            "estado": est_str,
-                            "fecha_est": f_est.strftime('%d/%m/%Y'),
-                            "proveedor": r['proveedor']
-                        })
+                    f_est_val = r.get('fecha_estimada')
+                    if pd.notna(f_est_val) and str(f_est_val).strip() != "":
+                        try:
+                            f_est = datetime.strptime(str(f_est_val), "%Y-%m-%d").date()
+                            d_alerta = int(r['dias_alarma']) if pd.notna(r['dias_alarma']) else 3
+                            f_alr = f_est - timedelta(days=d_alerta)
+                            
+                            est_str = ""
+                            if hoy_check > f_est:
+                                est_str = f"🔴 Atrasado (Vencía el {f_est.strftime('%d/%m/%Y')})"
+                            elif hoy_check >= f_alr:
+                                est_str = f"🟡 Próximo a Llegar ({f_est.strftime('%d/%m/%Y')})"
+                                
+                            if est_str:
+                                guias_para_notificar.append({
+                                    "producto": r['producto'],
+                                    "numero_guia": r['numero_guia'],
+                                    "estado": est_str,
+                                    "fecha_est": f_est.strftime('%d/%m/%Y'),
+                                    "proveedor": r['proveedor']
+                                })
+                        except Exception:
+                            pass
             
             if guias_para_notificar:
                 exito, msg = enviar_correo_alerta(email_emisor, email_pass, email_destino, guias_para_notificar)
@@ -422,14 +458,24 @@ with tab_rastreo:
         hoy = datetime.now().date()
         
         for idx, row in df_guias.iterrows():
-            fecha_est = datetime.strptime(str(row['fecha_estimada']), "%Y-%m-%d").date()
+            f_est_val = row.get('fecha_estimada')
+            if pd.notna(f_est_val) and str(f_est_val).strip() != "":
+                try:
+                    fecha_est = datetime.strptime(str(f_est_val), "%Y-%m-%d").date()
+                except Exception:
+                    fecha_est = hoy
+            else:
+                fecha_est = hoy
+
             dias_restantes = (fecha_est - hoy).days
-            fecha_alarma = fecha_est - timedelta(days=row['dias_alarma'])
+            d_alerta_val = int(row['dias_alarma']) if pd.notna(row.get('dias_alarma')) else 3
+            fecha_alarma = fecha_est - timedelta(days=d_alerta_val)
             
-            if row['estado'] == 'Entregado':
+            estado_val = str(row.get('estado', 'En Tránsito'))
+            if estado_val == 'Entregado':
                 badge = "🟢 Entregado"
-            elif row['estado'] in ['Cancelado / Perdido', 'Devuelto']:
-                badge = f"🔴 {row['estado']}"
+            elif estado_val in ['Cancelado / Perdido', 'Devuelto']:
+                badge = f"🔴 {estado_val}"
             elif hoy > fecha_est:
                 badge = f"🔴 Atrasado ({abs(dias_restantes)} días de retraso)"
             elif hoy >= fecha_alarma:
@@ -440,11 +486,11 @@ with tab_rastreo:
             metodo_1_val = row.get('metodo_1') if pd.notna(row.get('metodo_1')) else row.get('metodo', '')
             
             if pd.notna(row.get('escala')) and str(row['escala']).strip() != "":
-                ruta_txt = f"{row['origen']} ➔ {row['escala']} ({metodo_1_val}) ➔ {row['destino']}"
+                ruta_txt = f"{row.get('origen', '')} ➔ {row['escala']} ({metodo_1_val}) ➔ {row.get('destino', '')}"
                 if pd.notna(row.get('metodo_2')) and row['metodo_2'] != "Ninguno / Directo 🚫":
                     ruta_txt += f" ({row['metodo_2']})"
             else:
-                ruta_txt = f"{row['origen']} ➔ {row['destino']} ({metodo_1_val})"
+                ruta_txt = f"{row.get('origen', '')} ➔ {row.get('destino', '')} ({metodo_1_val})"
 
             c1_val = float(row['costo_1']) if pd.notna(row.get('costo_1')) else 0.0
             imp1_val = float(row['impuesto_1']) if pd.notna(row.get('impuesto_1')) else 0.0
@@ -456,13 +502,13 @@ with tab_rastreo:
             total_t2 = c2_val + imp2_val
             c_tot = total_t1 + total_t2
             
-            tc_val = float(row['tipo_cambio']) if pd.notna(row.get('tipo_cambio')) and row['tipo_cambio'] > 0 else 515.0
+            tc_val = float(row['tipo_cambio']) if pd.notna(row.get('tipo_cambio')) and float(row['tipo_cambio']) > 0 else 515.0
             total_crc = c_tot * tc_val
 
             with st.container(border=True):
-                st.markdown(f"## **{row['producto']}** `[{row['numero_guia']}]`")
+                st.markdown(f"## **{row.get('producto', 'Sin Producto')}** `[{row.get('numero_guia', 'S/N')}]`")
                 st.write(f"📍 **Ruta:** {ruta_txt}")
-                st.write(f"🏢 **Proveedor:** {row['proveedor']} | 💱 **Tipo Cambio:** ₡{tc_val:.2f}/$")
+                st.write(f"🏢 **Proveedor:** {row.get('proveedor', 'N/A')} | 💱 **Tipo Cambio:** ₡{tc_val:.2f}/$")
                 st.write(f"📅 **Llegada Estimada:** {fecha_est.strftime('%d/%m/%Y')} | **Estado:** {badge}")
                 
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -495,8 +541,8 @@ with tab_rastreo:
                 if pd.notna(row.get('notas')) and str(row['notas']).strip() != "":
                     st.caption(f"📝 **Notas:** {row['notas']}")
 
-                if row['estado'] not in ['Entregado', 'Cancelado / Perdido', 'Devuelto']:
-                    info_clima = obtener_clima_ruta(row['origen'])
+                if estado_val not in ['Entregado', 'Cancelado / Perdido', 'Devuelto']:
+                    info_clima = obtener_clima_ruta(row.get('origen', ''))
                     if info_clima:
                         if info_clima['alerta']:
                             st.error(f"⚠️ **Alerta Meteorológica ({info_clima['lugar']}):** Vientos de {info_clima['viento']} km/h.")
@@ -519,7 +565,7 @@ with tab_rastreo:
                         col_edit_bot_a, col_edit_bot_b = st.columns(2)
                         with col_edit_bot_a:
                             estados_opciones = ["En Tránsito", "Entregado", "Cancelado / Perdido", "Devuelto"]
-                            index_est = estados_opciones.index(row['estado']) if row['estado'] in estados_opciones else 0
+                            index_est = estados_opciones.index(estado_val) if estado_val in estados_opciones else 0
                             edit_estado = st.selectbox("Estado de la Orden", estados_opciones, index=index_est, key=f"eest_{row['id']}")
                         with col_edit_bot_b:
                             edit_notas = st.text_area("Notas", value=str(row.get('notas', '')), key=f"enotas_{row['id']}")
@@ -553,11 +599,11 @@ with tab_dashboard:
         hoy = datetime.now().date()
         df = df_raw.copy()
         
-        df['costo_1'] = df['costo_1'].fillna(0.0)
-        df['impuesto_1'] = df['impuesto_1'].fillna(0.0)
-        df['costo_2'] = df['costo_2'].fillna(0.0)
-        df['impuesto_2'] = df['impuesto_2'].fillna(0.0)
-        df['tipo_cambio'] = df['tipo_cambio'].apply(lambda x: x if pd.notna(x) and x > 0 else 515.0)
+        df['costo_1'] = pd.to_numeric(df['costo_1'], errors='coerce').fillna(0.0)
+        df['impuesto_1'] = pd.to_numeric(df['impuesto_1'], errors='coerce').fillna(0.0)
+        df['costo_2'] = pd.to_numeric(df['costo_2'], errors='coerce').fillna(0.0)
+        df['impuesto_2'] = pd.to_numeric(df['impuesto_2'], errors='coerce').fillna(0.0)
+        df['tipo_cambio'] = df['tipo_cambio'].apply(lambda x: float(x) if pd.notna(x) and float(x) > 0 else 515.0)
 
         df['Fletes Totales ($)'] = df['costo_1'] + df['costo_2']
         df['Impuestos Totales ($)'] = df['impuesto_1'] + df['impuesto_2']
@@ -565,14 +611,17 @@ with tab_dashboard:
         df['Total CRC (₡)'] = df['Total USD ($)'] * df['tipo_cambio']
 
         def calcular_estado_real(row):
-            if row['estado'] == 'Entregado':
+            est = str(row.get('estado', ''))
+            if est == 'Entregado':
                 return 'Entregado 🟢'
-            elif row['estado'] in ['Cancelado / Perdido', 'Devuelto']:
+            elif est in ['Cancelado / Perdido', 'Devuelto']:
                 return 'Cancelado / Devuelto 🔴'
             try:
-                fecha_est = datetime.strptime(str(row['fecha_estimada']), "%Y-%m-%d").date()
-                if hoy > fecha_est:
-                    return 'Atrasado 🔴'
+                f_est_val = row.get('fecha_estimada')
+                if pd.notna(f_est_val) and str(f_est_val).strip() != "":
+                    fecha_est = datetime.strptime(str(f_est_val), "%Y-%m-%d").date()
+                    if hoy > fecha_est:
+                        return 'Atrasado 🔴'
             except Exception:
                 pass
             return 'En Tránsito 🟡'
@@ -582,9 +631,10 @@ with tab_dashboard:
         with st.expander("🔍 **Filtros de Búsqueda**", expanded=True):
             f_col1, f_col2, f_col3 = st.columns(3)
             with f_col1:
-                filtro_estado = st.multiselect("Estado de Orden", options=df['estado'].unique().tolist(), default=df['estado'].unique().tolist())
+                estados_disponibles = df['estado'].unique().tolist()
+                filtro_estado = st.multiselect("Estado de Orden", options=estados_disponibles, default=estados_disponibles)
             with f_col2:
-                prov_list = [p for p in df['proveedor'].unique().tolist() if str(p).strip() != ""]
+                prov_list = [p for p in df['proveedor'].unique().tolist() if pd.notna(p) and str(p).strip() != ""]
                 filtro_proveedor = st.multiselect("Proveedor", options=prov_list, default=prov_list)
             with f_col3:
                 search_text = st.text_input("🔎 Número de Guía o Producto", placeholder="Ej. 008612456, Varios...")
