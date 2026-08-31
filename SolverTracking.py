@@ -124,9 +124,17 @@ def ejecutar_sql(sql, params=None):
         if not url.endswith("/"):
             url += "/"
         api_url = url + "v2/pipeline"
-        
-        stmts = [{"q": { "sql": sql, "args": [{"type": "text", "value": str(p)} if p is not None else {"type": "null"} for p in (params or [])] }}]
-        
+        # Formato de argumentos compatible con el pipeline de Turso v2
+        args_list = []
+        for p in (params or []):
+            if p is None:
+                args_list.append({"type": "null"})
+            elif isinstance(p, (int, float)):
+                args_list.append({"type": "float" if isinstance(p, float) else "integer", "value": str(p)})
+            else:
+                args_list.append({"type": "text", "value": str(p)})
+                
+        stmts = [{"q": {"sql": sql, "args": args_list}}]
         req_data = json.dumps({"requests": stmts}).encode('utf-8')
         req = urllib.request.Request(api_url, data=req_data, headers={
             "Authorization": f"Bearer {st.secrets['TURSO_AUTH_TOKEN']}",
