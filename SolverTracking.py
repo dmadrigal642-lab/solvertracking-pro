@@ -6,7 +6,8 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
-import libsql_client
+import urllib.request
+import json
 
 # Configuración de página
 st.set_page_config(page_title="SolverTracking Pro", layout="wide", page_icon="🚢")
@@ -113,15 +114,37 @@ def obtener_clima_ruta(origen):
 # --- CONEXIÓN Y BASE DE DATOS (TURSO / LOCAL) ---
 def obtener_conexion():
     if "TURSO_DATABASE_URL" in st.secrets:
-        return libsql_client.create_client_sync(
-            url=st.secrets["TURSO_DATABASE_URL"],
-            auth_token=st.secrets["TURSO_AUTH_TOKEN"]
-        )
+        return "turso"
     else:
         return sqlite3.connect("solver_tracking.db")
 
+def ejecutar_sql(sql, params=None):
+    if "TURSO_DATABASE_URL" in st.secrets:
+        url = st.secrets["TURSO_DATABASE_URL"].replace("libsql://", "https://").replace("wss://", "https://")
+        if not url.endswith("/"):
+            url += "/"
+        api_url = url + "v2/pipeline"
+        
+        # Formatear parámetros para la API de Turso
+        stmts = [{"q": { "sql": sql, "args": [{"type": "text", "value": str(p)} if p is not None else {"type": "null"} for p in (params or [])] }}]
+        
+        req_data = json.dumps({"requests": stmts}).encode('utf-8')
+        req = urllib.request.Request(api_url, data=req_data, headers={
+            "Authorization": f"Bearer {st.secrets['TURSO_AUTH_TOKEN']}",
+            "Content-Type": "application/json"
+        })
+        try:
+            with urllib.request.urlopen(req) as response:
+                res_json = json.loads(response.read().decode('utf-8'))
+                return res_json
+        except Exception as e:
+            st.error(f"Error de conexión con Turso: {e}")
+            return None
+    else:
+        conn = sqlite3.connect("solver_tracking.db")
+        return conn
+
 def init_db():
-    conn = obtener_conexion()
     query_tabla = '''
         CREATE TABLE IF NOT EXISTS guias (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,9 +174,9 @@ def init_db():
         )
     '''
     if "TURSO_DATABASE_URL" in st.secrets:
-        conn.execute(query_tabla)
-        conn.close()
+        ejecutar_sql(query_tabla)
     else:
+        conn = obtener_conexion()
         c = conn.cursor()
         c.execute(query_tabla)
         columnas_nuevas = [
@@ -171,32 +194,33 @@ def init_db():
         conn.close()
 
 def guardar_guia(guia, producto, proveedor, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, fecha_compra, dias_alarma, notas):
-    conn = obtener_conexion()
     dias_totales = dias_1 + dias_2
     costo_total = costo_1 + imp_1 + costo_2 + imp_2
     fecha_est = (fecha_compra + timedelta(days=dias_totales)).strftime('%Y-%m-%d')
     f_compra_str = fecha_compra.strftime('%Y-%m-%d')
-    try:
-        sql = '''
-            INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        '''
-        params = (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito')
-        if "TURSO_DATABASE_URL" in st.secrets:
-            conn.execute(sql, params)
-        else:
+    
+    sql = '''
+        INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    '''
+    params = (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito')
+    
+    if "TURSO_DATABASE_URL" in st.secrets:
+        res = ejecutar_sql(sql, params)
+        return res is not None
+    else:
+        conn = obtener_conexion()
+        try:
             c = conn.cursor()
             c.execute(sql, params)
             conn.commit()
-        exito = True
-    except Exception:
-        exito = False
-    if hasattr(conn, "close"):
-        conn.close()
-    return exito
+            conn.close()
+            return True
+        except Exception:
+            conn.close()
+            return False
 
 def actualizar_guia(id_registro, costo_1, imp_1, costo_2, imp_2, tipo_cambio, escala, notas, estado):
-    conn = obtener_conexion()
     costo_total = costo_1 + imp_1 + costo_2 + imp_2
     sql = '''
         UPDATE guias 
@@ -205,38 +229,44 @@ def actualizar_guia(id_registro, costo_1, imp_1, costo_2, imp_2, tipo_cambio, es
     '''
     params = (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro)
     if "TURSO_DATABASE_URL" in st.secrets:
-        conn.execute(sql, params)
+        ejecutar_sql(sql, params)
     else:
+        conn = obtener_conexion()
         c = conn.cursor()
         c.execute(sql, params)
         conn.commit()
-    if hasattr(conn, "close"):
         conn.close()
 
 def eliminar_guia(id_registro):
-    conn = obtener_conexion()
     sql = "DELETE FROM guias WHERE id = ?"
     if "TURSO_DATABASE_URL" in st.secrets:
-        conn.execute(sql, (id_registro,))
+        ejecutar_sql(sql, (id_registro,))
     else:
+        conn = obtener_conexion()
         c = conn.cursor()
         c.execute(sql, (id_registro,))
         conn.commit()
-    if hasattr(conn, "close"):
         conn.close()
 
 def cargar_guias():
-    conn = obtener_conexion()
     sql = "SELECT * FROM guias ORDER BY id DESC"
     if "TURSO_DATABASE_URL" in st.secrets:
-        res = conn.execute(sql)
-        df = pd.DataFrame(res.rows, columns=res.columns)
+        res = ejecutar_sql(sql)
+        try:
+            results = res["results"][0]["response"]["result"]
+            cols = [c["name"] for c in results["cols"]]
+            rows = []
+            for row in results["rows"]:
+                r_vals = [cell.get("value") for cell in row]
+                rows.append(r_vals)
+            return pd.DataFrame(rows, columns=cols)
+        except Exception:
+            return pd.DataFrame()
     else:
+        conn = obtener_conexion()
         df = pd.read_sql_query(sql, conn)
         conn.close()
-    return df
-
-init_db()
+        return df
 
 # --- BARRA LATERAL ---
 with st.sidebar:
