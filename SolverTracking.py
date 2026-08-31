@@ -125,7 +125,6 @@ def ejecutar_sql(sql, params=None):
             url += "/"
         api_url = url + "v2/pipeline"
         
-        # Formatear parámetros para la API de Turso
         stmts = [{"q": { "sql": sql, "args": [{"type": "text", "value": str(p)} if p is not None else {"type": "null"} for p in (params or [])] }}]
         
         req_data = json.dumps({"requests": stmts}).encode('utf-8')
@@ -141,8 +140,7 @@ def ejecutar_sql(sql, params=None):
             st.error(f"Error de conexión con Turso: {e}")
             return None
     else:
-        conn = sqlite3.connect("solver_tracking.db")
-        return conn
+        return sqlite3.connect("solver_tracking.db")
 
 def init_db():
     query_tabla = '''
@@ -267,6 +265,8 @@ def cargar_guias():
         df = pd.read_sql_query(sql, conn)
         conn.close()
         return df
+
+init_db()
 
 # --- BARRA LATERAL ---
 with st.sidebar:
