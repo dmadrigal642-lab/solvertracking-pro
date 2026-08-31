@@ -154,7 +154,8 @@ def ejecutar_sql(sql, params=None):
                 res_json = json.loads(response.read().decode('utf-8'))
                 if res_json.get("results", [{}])[0].get("type") == "error":
                     err_msg = res_json["results"][0]["error"]["message"]
-                    st.error(f"Error devuelto por Turso: {err_msg}")
+                    if "duplicate column name" not in err_msg:
+                        st.error(f"Error devuelto por Turso: {err_msg}")
                     return None
                 return res_json
         except Exception as e:
