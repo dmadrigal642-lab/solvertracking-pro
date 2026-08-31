@@ -120,10 +120,12 @@ def ejecutar_sql(sql, params=None):
         
         args_list = []
         for p in (params or []):
-            if p is None:
+            if p is None or (isinstance(p, float) and pd.isna(p)):
                 args_list.append({"type": "null"})
-            elif isinstance(p, (int, float)):
-                args_list.append({"type": "float" if isinstance(p, float) else "integer", "value": str(p)})
+            elif isinstance(p, int):
+                args_list.append({"type": "integer", "value": str(p)})
+            elif isinstance(p, float):
+                args_list.append({"type": "float", "value": str(p)})
             else:
                 args_list.append({"type": "text", "value": str(p)})
                 
@@ -150,6 +152,10 @@ def ejecutar_sql(sql, params=None):
         try:
             with urllib.request.urlopen(req) as response:
                 res_json = json.loads(response.read().decode('utf-8'))
+                if res_json.get("results", [{}])[0].get("type") == "error":
+                    err_msg = res_json["results"][0]["error"]["message"]
+                    st.error(f"Error devuelto por Turso: {err_msg}")
+                    return None
                 return res_json
         except Exception as e:
             st.error(f"Error de conexión con Turso: {e}")
@@ -188,7 +194,6 @@ def init_db():
     '''
     if "TURSO_DATABASE_URL" in st.secrets:
         ejecutar_sql(query_tabla)
-        # Intentar agregar columnas si la tabla ya existía sin ellas
         columnas_nuevas = [
             ("escala", "TEXT"), ("metodo_1", "TEXT"), ("costo_1", "REAL"),
             ("dias_1", "INTEGER"), ("metodo_2", "TEXT"), ("costo_2", "REAL"),
@@ -221,8 +226,8 @@ def init_db():
         conn.close()
 
 def guardar_guia(guia, producto, proveedor, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, fecha_compra, dias_alarma, notas):
-    dias_totales = dias_1 + dias_2
-    costo_total = costo_1 + imp_1 + costo_2 + imp_2
+    dias_totales = int(dias_1) + int(dias_2)
+    costo_total = float(costo_1) + float(imp_1) + float(costo_2) + float(imp_2)
     fecha_est = (fecha_compra + timedelta(days=dias_totales)).strftime('%Y-%m-%d')
     f_compra_str = fecha_compra.strftime('%Y-%m-%d')
     
@@ -230,7 +235,13 @@ def guardar_guia(guia, producto, proveedor, origen, escala, destino, metodo_1, c
         INSERT INTO guias (numero_guia, producto, proveedor, costo, origen, escala, destino, metodo_1, costo_1, impuesto_1, dias_1, metodo_2, costo_2, impuesto_2, dias_2, tipo_cambio, fecha_compra, dias_promedio, fecha_estimada, dias_alarma, notas, estado)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     '''
-    params = (guia, producto, proveedor, costo_total, origen, escala, destino, metodo_1, costo_1, imp_1, dias_1, metodo_2, costo_2, imp_2, dias_2, tipo_cambio, f_compra_str, dias_totales, fecha_est, dias_alarma, notas, 'En Tránsito')
+    params = (
+        str(guia), str(producto), str(proveedor or ""), float(costo_total), str(origen), 
+        str(escala or ""), str(destino), str(metodo_1), float(costo_1), float(imp_1), 
+        int(dias_1), str(metodo_2), float(costo_2), float(imp_2), int(dias_2), 
+        float(tipo_cambio), str(f_compra_str), int(dias_totales), str(fecha_est), 
+        int(dias_alarma), str(notas or ""), "En Tránsito"
+    )
     
     if "TURSO_DATABASE_URL" in st.secrets:
         res = ejecutar_sql(sql, params)
@@ -248,13 +259,13 @@ def guardar_guia(guia, producto, proveedor, origen, escala, destino, metodo_1, c
             return False
 
 def actualizar_guia(id_registro, costo_1, imp_1, costo_2, imp_2, tipo_cambio, escala, notas, estado):
-    costo_total = costo_1 + imp_1 + costo_2 + imp_2
+    costo_total = float(costo_1) + float(imp_1) + float(costo_2) + float(imp_2)
     sql = '''
         UPDATE guias 
         SET costo_1 = ?, impuesto_1 = ?, costo_2 = ?, impuesto_2 = ?, tipo_cambio = ?, costo = ?, escala = ?, notas = ?, estado = ?
         WHERE id = ?
     '''
-    params = (costo_1, imp_1, costo_2, imp_2, tipo_cambio, costo_total, escala, notas, estado, id_registro)
+    params = (float(costo_1), float(imp_1), float(costo_2), float(imp_2), float(tipo_cambio), float(costo_total), str(escala or ""), str(notas or ""), str(estado), int(id_registro))
     if "TURSO_DATABASE_URL" in st.secrets:
         ejecutar_sql(sql, params)
     else:
@@ -267,11 +278,11 @@ def actualizar_guia(id_registro, costo_1, imp_1, costo_2, imp_2, tipo_cambio, es
 def eliminar_guia(id_registro):
     sql = "DELETE FROM guias WHERE id = ?"
     if "TURSO_DATABASE_URL" in st.secrets:
-        ejecutar_sql(sql, (id_registro,))
+        ejecutar_sql(sql, (int(id_registro),))
     else:
         conn = sqlite3.connect("solver_tracking.db")
         c = conn.cursor()
-        c.execute(sql, (id_registro,))
+        c.execute(sql, (int(id_registro),))
         conn.commit()
         conn.close()
 
@@ -294,7 +305,6 @@ def cargar_guias():
         df = pd.read_sql_query(sql, conn)
         conn.close()
 
-    # Blindaje contra columnas faltantes en tablas antiguas de Turso
     expected_cols = [
         'id', 'numero_guia', 'producto', 'proveedor', 'costo', 'origen', 'escala', 
         'destino', 'metodo_1', 'costo_1', 'impuesto_1', 'dias_1', 'metodo_2', 
@@ -440,7 +450,7 @@ with tab_nuevo:
                     st.success(f"¡Guía '{guia}' guardada exitosamente!")
                     st.rerun()
                 else:
-                    st.error(f"La guía '{guia}' ya existe en el sistema.")
+                    st.error("No se pudo guardar la guía (verifique si el número de guía ya existe).")
             else:
                 st.warning("Por favor complete los campos obligatorios (*).")
 
